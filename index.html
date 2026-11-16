@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Inkwell – Fanfiction</title>
+<style>
+:root{--bg:#faf6f1;--card:#fff;--tx:#2a2228;--mut:#6f6470;--ac:#9b3d6b;--acx:#fff;--bd:#e6dcd3;--hl:#f7d9e8;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#17131a;--card:#221c26;--tx:#efe7f0;--mut:#a899ab;--ac:#e07fb0;--acx:#17131a;--bd:#3a3040;--hl:#4a2a3e;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#17131a;--card:#221c26;--tx:#efe7f0;--mut:#a899ab;--ac:#e07fb0;--acx:#17131a;--bd:#3a3040;--hl:#4a2a3e;color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.6 Georgia,'Times New Roman',serif}
+header{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;padding:12px 18px;border-bottom:1px solid var(--bd);background:var(--card)}
+h1{margin:0;font-size:1.4rem;color:var(--ac);cursor:pointer}
+button,input,select,textarea,details,.sans{font-family:system-ui,sans-serif}
+main{max-width:720px;margin:0 auto;padding:18px}
+button{background:var(--ac);color:var(--acx);border:0;border-radius:8px;padding:8px 14px;font-size:.9rem;cursor:pointer}
+button.ghost{background:transparent;color:var(--ac);border:1px solid var(--ac)}
+button:disabled{opacity:.5}
+input,select,textarea{width:100%;padding:9px 11px;border:1px solid var(--bd);border-radius:8px;background:var(--card);color:var(--tx);font-size:1rem;margin:4px 0 12px}
+textarea{min-height:240px;font-family:Georgia,serif;line-height:1.6}
+label{font-size:.85rem;color:var(--mut)}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:14px 16px;margin-bottom:12px;cursor:pointer}
+.card h3{margin:0 0 4px}.meta{color:var(--mut);font-size:.85rem;font-family:system-ui,sans-serif}
+.story p{margin:0 0 1em}
+mark{background:var(--hl);color:inherit;border-radius:3px;padding:0 2px}
+.tip{background:var(--hl);border-radius:8px;padding:10px 12px;font-size:.88rem;font-family:system-ui,sans-serif;margin-bottom:14px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:10px 0}
+.tag{display:inline-block;font-size:.78rem;border:1px solid var(--bd);border-radius:99px;padding:1px 9px;margin:2px 4px 2px 0;color:var(--mut);cursor:pointer;font-family:system-ui,sans-serif}
+.cm{border-top:1px solid var(--bd);padding:8px 0;font-size:.95rem}
+details{position:relative}summary{cursor:pointer;color:var(--ac);font-size:.9rem}
+.panel{position:absolute;right:0;top:28px;z-index:5;width:260px;background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:12px}
+.panel input{margin:2px 0 8px;padding:6px 9px}
+.chap{border:1px solid var(--bd);border-radius:10px;padding:10px;margin-bottom:10px}
+#msg{color:var(--mut)}
+</style>
+</head>
+<body>
+<header>
+  <h1 id="home">📖 Inkwell</h1>
+  <details id="set"><summary>⚙️ My reading settings</summary><div class="panel" id="panel"></div></details>
+  <button id="acct" class="ghost">Sign in</button> <button id="newbtn">✏️ Write</button>
+</header>
+<main id="app"></main>
+<script>
+const app = document.getElementById('app');
+let S = { stories: [], likes: [], comments: [], uid: null, db: null, loaded: false };
+let view = 'list', cur = null, chIdx = 0, q = '';
+let cfg = { fn: '', ln: '', ec: '', hc: '', pen: '' };
+try { Object.assign(cfg, JSON.parse(localStorage.getItem('ink_cfg') || '{}')); } catch (e) {}
+
+function el(tag, props, ...kids) {
+  const e = document.createElement(tag);
+  Object.assign(e, props || {});
+  kids.flat().forEach(k => e.append(k));
+  return e;
+}
+const go = (v, s, c) => { view = v; cur = s || null; chIdx = c || 0; render(); scrollTo(0, 0); };
+document.getElementById('home').onclick = () => go('list');
+document.getElementById('newbtn').onclick = () => S.uid ? go('edit') : go('auth');
+
+// settings panel
+[['fn', 'First name (Y/N)'], ['ln', 'Last name (Y/L/N)'], ['ec', 'Eye color (E/C)'], ['hc', 'Hair color (H/C)'], ['pen', 'Pen name (for writing & comments)']].forEach(([k, lab]) => {
+  const i = el('input', { value: cfg[k], maxLength: 40 });
+  i.oninput = () => {
+    cfg[k] = i.value.trim();
+    try { localStorage.setItem('ink_cfg', JSON.stringify(cfg)); } catch (e) {}
+    if (view === 'read') render();
+  };
+  document.getElementById('panel').append(el('label', { textContent: lab }), i);
+});
+
+// Swap placeholders for the reader's details, highlighted
+const RE = /\b(?:y\s*\/\s*l\s*\/\s*n|y\s*\/\s*n|e\s*\/\s*c|h\s*\/\s*c)\b/gi;
+function personalize(text) {
+  const map = { 'y/n': cfg.fn, 'y/l/n': cfg.ln, 'e/c': cfg.ec, 'h/c': cfg.hc };
+  const frag = document.createDocumentFragment();
+  let last = 0, m;
+  RE.lastIndex = 0;
+  while ((m = RE.exec(text))) {
+    frag.append(text.slice(last, m.index));
+    const v = map[m[0].replace(/\s/g, '').toLowerCase()];
+    frag.append(v ? el('mark', { textContent: v }) : m[0]);
+    last = m.index + m[0].length;
+  }
+  frag.append(text.slice(last));
+  return frag;
+}
+const chaps = s => s.chapters && s.chapters.length ? s.chapters : [{ title: '', body: s.body || '' }];
+const likeCount = id => S.likes.filter(d => (d.ids || []).includes(id)).length;
+const myLikes = () => (S.likes.find(d => d.id === S.uid) || {}).ids || [];
+const byLine = s => `${s.fandom || 'Original'} · by ${s.author || 'Anonymous'}`;
+function tagsEl(tags) {
+  return el('div', {}, (tags || []).map(t => el('span', { className: 'tag', textContent: '#' + t, onclick: e => { e.stopPropagation(); q = t; go('list'); } })));
+}
+
+function render() {
+  app.replaceChildren();
+  if (view === 'list') renderList();
+  else if (view === 'edit') renderEdit();
+  else if (view === 'auth') renderAuth();
+  else renderRead();
+}
+
+function renderList() {
+  const results = el('div');
+  const box = el('input', { placeholder: 'Search title, fandom, author, tag or text…', value: q });
+  const fill = () => {
+    results.replaceChildren();
+    if (!S.loaded) return results.append(el('p', { id: 'msg', textContent: 'Loading stories…' }));
+    const t = q.toLowerCase().replace(/^#/, '');
+    const list = S.stories.filter(s => !t || [s.title, s.fandom, s.author, (s.tags || []).join(' '), chaps(s).map(c => c.body).join(' ')].join(' ').toLowerCase().includes(t));
+    if (!list.length) return results.append(el('p', { id: 'msg', textContent: S.stories.length ? 'No matches.' : 'No stories yet. Be the first to write one!' }));
+    list.forEach(s => {
+      const c = el('div', { className: 'card' },
+        el('h3', {}, personalize(s.title)),
+        el('div', { className: 'meta', textContent: `${byLine(s)} · ${chaps(s).length} ch. · ♥ ${likeCount(s.id)}` }),
+        tagsEl(s.tags),
+        el('div', { textContent: chaps(s)[0].body.slice(0, 140).replace(/\s+/g, ' ') + '…' }));
+      c.onclick = () => go('read', s);
+      results.append(c);
+    });
+  };
+  box.oninput = () => { q = box.value; fill(); };
+  app.append(box, results);
+  fill();
+}
+
+function renderRead() {
+  const s = S.stories.find(x => x.id === cur.id) || cur;
+  cur = s;
+  const cs = chaps(s), c = cs[Math.min(chIdx, cs.length - 1)];
+  const liked = myLikes().includes(s.id);
+  const mine = S.uid && s.authorId === S.uid;
+  const sel = el('select', { onchange: () => go('read', s, +sel.value) }, cs.map((x, i) => el('option', { value: i, textContent: `${i + 1}. ${x.title || 'Chapter ' + (i + 1)}`, selected: i === chIdx })));
+  app.append(el('button', { className: 'ghost', textContent: '← Back', onclick: () => go('list') }));
+  if (!cfg.fn) app.append(el('div', { className: 'tip', style: 'margin-top:12px', textContent: 'Tip: open “My reading settings” at the top and enter your name, eye color and hair color. Y/N, Y/L/N, E/C and H/C in the story will become yours.' }));
+  app.append(el('h2', {}, personalize(s.title)), el('div', { className: 'meta', textContent: byLine(s) }), tagsEl(s.tags));
+  const row = el('div', { className: 'row' },
+    el('button', { className: liked ? '' : 'ghost', textContent: `${liked ? '♥' : '♡'} ${likeCount(s.id)}`, onclick: toggleLike }));
+  if (mine) row.append(el('button', { className: 'ghost', textContent: 'Edit', onclick: () => go('edit', s) }));
+  app.append(row);
+  if (cs.length > 1) app.append(sel);
+  const body = el('div', { className: 'story' });
+  if (c.title) body.append(el('h3', {}, personalize(c.title)));
+  c.body.split(/\n+/).filter(p => p.trim()).forEach(p => body.append(el('p', {}, personalize(p))));
+  app.append(body);
+  if (cs.length > 1) app.append(el('div', { className: 'row' },
+    el('button', { className: 'ghost', textContent: '← Prev', disabled: chIdx === 0, onclick: () => go('read', s, chIdx - 1) }),
+    el('button', { className: 'ghost', textContent: 'Next →', disabled: chIdx >= cs.length - 1, onclick: () => go('read', s, chIdx + 1) })));
+  // comments
+  app.append(el('h3', { textContent: 'Comments' }));
+  const cm = S.comments.filter(x => x.sid === s.id).sort((a, b) => a.created - b.created);
+  if (!cm.length) app.append(el('p', { id: 'msg', textContent: 'No comments yet.' }));
+  cm.forEach(x => app.append(el('div', { className: 'cm' },
+    el('b', { textContent: x.name || 'Anonymous' }), ' ', el('span', { textContent: x.text }), ' ',
+    S.uid && x.uid === S.uid ? el('a', { textContent: '✕', style: 'cursor:pointer;color:var(--mut)', onclick: () => S.db.collection('comments').doc(x.id).delete() }) : '')));
+  const ta = el('textarea', { placeholder: 'Leave a comment…', style: 'min-height:70px' });
+  const send = el('button', { textContent: 'Post comment' });
+  send.onclick = async () => {
+    if (!ta.value.trim()) return;
+    if (!S.uid) return go('auth');
+    send.disabled = true;
+    try { await S.db.collection('comments').doc('c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5)).set({ sid: s.id, text: ta.value.trim().slice(0, 1000), name: cfg.pen || 'Anonymous', uid: S.uid, created: Date.now() }); ta.value = ''; } catch (e) {}
+    send.disabled = false;
+  };
+  app.append(ta, send);
+}
+async function toggleLike() {
+  if (!S.uid) return go('auth');
+  const ids = new Set(myLikes());
+  ids.has(cur.id) ? ids.delete(cur.id) : ids.add(cur.id);
+  try { await S.db.collection('likes').doc(S.uid).set({ ids: [...ids] }); } catch (e) {}
+}
+
+function renderEdit() {
+  const s = cur, isNew = !s;
+  const d = { title: s ? s.title : '', fandom: s ? s.fandom || '' : '', author: s ? s.author || '' : cfg.pen, tags: s ? (s.tags || []).join(', ') : '', chapters: s ? chaps(s).map(c => ({ ...c })) : [{ title: '', body: '' }] };
+  const field = (lab, k, ph) => { const i = el('input', { value: d[k], placeholder: ph || '', oninput: () => d[k] = i.value }); return [el('label', { textContent: lab }), i]; };
+  const err = el('div', { id: 'msg' });
+  const list = el('div');
+  const drawCh = () => {
+    list.replaceChildren();
+    d.chapters.forEach((c, i) => {
+      const t = el('input', { value: c.title, placeholder: 'Chapter title (optional)', oninput: () => c.title = t.value });
+      const b = el('textarea', { value: c.body, placeholder: 'Write here. Use Y/N, Y/L/N, E/C and H/C where the reader’s details should go.', oninput: () => c.body = b.value });
+      const box = el('div', { className: 'chap' }, el('label', { textContent: 'Chapter ' + (i + 1) }), t, b);
+      if (d.chapters.length > 1) box.append(el('button', { className: 'ghost', textContent: 'Remove chapter', onclick: () => { d.chapters.splice(i, 1); drawCh(); } }));
+      list.append(box);
+    });
+  };
+  drawCh();
+  const save = el('button', { textContent: isNew ? 'Publish' : 'Save changes' });
+  save.onclick = async () => {
+    if (!d.title.trim() || !d.chapters.some(c => c.body.trim())) { err.textContent = 'Please add a title and some story text.'; return; }
+    if (!S.db || !S.uid) { err.textContent = 'You need to be signed in to publish.'; return; }
+    save.disabled = true;
+    const id = s ? s.id : 's' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const doc = { title: d.title.trim(), fandom: d.fandom.trim(), author: d.author.trim(), authorId: s ? s.authorId : S.uid, tags: d.tags.split(',').map(t => t.trim().replace(/^#/, '')).filter(Boolean).slice(0, 15), chapters: d.chapters.filter(c => c.body.trim()), created: s ? s.created : Date.now(), updated: Date.now() };
+    try { await S.db.collection('stories').doc(id).set(doc); go('read', { ...doc, id }); }
+    catch (e) { err.textContent = 'Could not save: ' + (e.message || 'unknown error'); save.disabled = false; }
+  };
+  const row = el('div', { className: 'row' }, save, el('button', { className: 'ghost', textContent: 'Cancel', onclick: () => go(s ? 'read' : 'list', s) }));
+  if (s) row.append(el('button', { className: 'ghost', textContent: 'Delete story', onclick: async () => { if (confirm('Delete this story for good?')) { try { await S.db.collection('stories').doc(s.id).delete(); go('list'); } catch (e) { err.textContent = 'Could not delete.'; } } } }));
+  app.append(el('h2', { textContent: isNew ? 'Write a story' : 'Edit story' }),
+    el('div', { className: 'tip', textContent: 'Placeholders: Y/N = first name · Y/L/N = last name · E/C = eye color · H/C = hair color. Each reader sees their own details.' }),
+    ...field('Title', 'title'), ...field('Fandom', 'fandom', 'e.g. Harry Potter'), ...field('Pen name', 'author'), ...field('Tags (comma separated)', 'tags', 'slow burn, angst, fluff'),
+    list, el('button', { className: 'ghost', textContent: '+ Add chapter', onclick: () => { d.chapters.push({ title: '', body: '' }); drawCh(); } }), row, err);
+}
+
+async function api(m, u, b) {
+  const r = await fetch(u, { method: m, headers: { 'Content-Type': 'application/json' }, body: b ? JSON.stringify(b) : undefined });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || 'Something went wrong');
+  return j;
+}
+async function refresh(name) {
+  const rows = await api('GET', '/api/c/' + name);
+  if (name === 'stories') rows.sort((a, b) => b.created - a.created);
+  S[name] = rows;
+}
+const refreshAll = () => Promise.all(['stories', 'likes', 'comments'].map(refresh));
+// Same small interface the page already used, now backed by the server
+S.db = { collection: name => ({ doc: id => ({
+  set: async d => { await api('PUT', `/api/c/${name}/${id}`, d); await refresh(name); if (view !== 'edit') render(); },
+  delete: async () => { await api('DELETE', `/api/c/${name}/${id}`); await refresh(name); if (view !== 'edit') render(); } }) }) };
+
+function hdr() { const b = document.getElementById('acct'); b.textContent = S.uid ? 'Sign out' : 'Sign in'; b.title = S.email || ''; }
+document.getElementById('acct').onclick = async () => {
+  if (S.uid) { await api('POST', '/api/logout').catch(() => {}); S.uid = null; S.email = ''; hdr(); go('list'); } else go('auth');
+};
+function renderAuth() {
+  let mode = 'in';
+  const em = el('input', { type: 'email', placeholder: 'Email', autocomplete: 'email' });
+  const pw = el('input', { type: 'password', placeholder: 'Password (8+ characters)', autocomplete: 'current-password' });
+  const msg = el('div', { id: 'msg' }), btn = el('button'), sw = el('a', { style: 'cursor:pointer;color:var(--ac)' });
+  const draw = () => { btn.textContent = mode === 'in' ? 'Log in' : 'Create account'; sw.textContent = mode === 'in' ? 'New here? Create an account' : 'Have an account? Log in'; };
+  draw();
+  sw.onclick = () => { mode = mode === 'in' ? 'up' : 'in'; msg.textContent = ''; draw(); };
+  btn.onclick = async () => {
+    btn.disabled = true; msg.textContent = '';
+    try {
+      const r = await api('POST', mode === 'in' ? '/api/login' : '/api/signup', { email: em.value, password: pw.value });
+      if (mode === 'up') msg.textContent = r.message;
+      else { S.uid = r.id; S.email = r.email; hdr(); go('list'); }
+    } catch (e) { msg.textContent = e.message; }
+    btn.disabled = false;
+  };
+  app.append(el('h2', { textContent: 'Account' }), em, pw, btn, el('div', { className: 'row' }, sw), msg);
+}
+render();
+(async () => {
+  try { const me = await api('GET', '/api/me'); if (me.id) { S.uid = me.id; S.email = me.email; } } catch (e) {}
+  hdr();
+  try { await refreshAll(); } catch (e) {}
+  S.loaded = true; render();
+  // pick up other people's new stories/comments without wiping what you're typing
+  setInterval(async () => {
+    if (!['list', 'read'].includes(view) || document.activeElement.tagName === 'INPUT' || (document.querySelector('textarea') || {}).value) return;
+    try { await refreshAll(); render(); } catch (e) {}
+  }, 20000);
+})();
+</script>
+</body>
+</html>
